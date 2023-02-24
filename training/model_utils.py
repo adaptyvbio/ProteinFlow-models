@@ -83,7 +83,7 @@ def pna_aggregate(features, mask):
 
 
 
-def loss_nll(S, log_probs, mask, X, X_pred, ignore_unknown):
+def loss_nll(S, log_probs, mask, ignore_unknown):
     """Negative log probabilities"""
     if log_probs is None:
         true_false = 0
@@ -94,13 +94,7 @@ def loss_nll(S, log_probs, mask, X, X_pred, ignore_unknown):
         if ignore_unknown:
             S_argmaxed += 1
         true_false = (S == S_argmaxed).float()
-    if X_pred is None:
-        rmsd = 0
-    else:
-        sqd = (X[:, :, 2, :] - X_pred[:, :, 2, :]) ** 2
-        mean_sqd = (sqd * mask.unsqueeze(-1)).sum(-1).sum(-1) / mask.sum(-1)
-        rmsd = torch.sqrt(mean_sqd).sum()
-    return true_false, rmsd, pp
+    return true_false, pp
 
 
 def loss_smoothed(S, logits, mask, no_smoothing, ignore_unknown, weight=0.1):

@@ -21,59 +21,6 @@ from math import sqrt
 from proteinflow import ProteinLoader
 
 
-def get_mse_loss(att_mse, mask):
-    if att_mse is not None:
-        new, old, E_idx = att_mse
-        mask_attend = gather_nodes(mask.unsqueeze(-1), E_idx).squeeze(-1)
-        mask_attend = mask.unsqueeze(-1) * mask_attend
-        loss_att_mse = (new - old) ** 2
-        return loss_att_mse[mask_attend.bool()].mean()
-    return torch.zeros(1).to(mask.device)
-
-def compute_vec_angles(vecs1, vecs2):
-
-    inner_product = (vecs1 * vecs2).sum(dim=-1)
-    cos = inner_product / (torch.norm(vecs1, dim=-1) * torch.norm(vecs2, dim=-1) + 1e-6)
-    cos -= 1e-6 * torch.sign(cos)
-    return torch.acos(cos)
-
-def get_orientation_loss(vecs1, vecs2, mask):
-    
-    if vecs1 is None or vecs2 is None:
-        return 0
-    angles = compute_vec_angles(vecs1[mask.bool()], vecs2[mask.bool()])
-    return torch.mean(torch.abs((angles - np.pi) / np.pi)).to(mask.device)
-
-def get_orientation_accuracy(vecs1, vecs2, mask):
-
-    if vecs1 is None or vecs2 is None:
-        return torch.tensor(0.)
-    angles = compute_vec_angles(vecs1[:, :, 0], vecs2[:, :, 0])
-    return torch.sum((torch.abs(angles - np.pi) <= (np.pi / 6)) * mask)
-
-def norm_pdf(sigma, x):
-    return (1 / (sigma * sqrt(2 * torch.pi))) * torch.exp(-(x ** 2) / (2 * sigma ** 2))
-
-def get_coors_loss(X_pred, X_true, mask, loss_type):
-    if loss_type == "mse":
-        diff = torch.sum((X_pred[:, :, 2, :][mask.bool()] - X_true[:, :, 2, :][mask.bool()]) ** 2, dim=-1)
-        return diff.mean()
-    elif loss_type == "huber":
-        delta = 1
-        diff = torch.sum((X_pred[:, :, 2, :][mask.bool()] - X_true[:, :, 2, :][mask.bool()]) ** 2, dim=-1)
-        root = torch.sqrt(diff)
-        loss = torch.zeros_like(diff)
-        greater_mask = (root > delta)
-        loss[~greater_mask] = (1 / 2) * diff[~greater_mask]
-        loss[greater_mask] = delta * (root[greater_mask] - delta / 2)
-        return loss.mean()
-    elif loss_type == "relaxed_mse":
-        scale = 0.3
-        diff = torch.sum((X_pred[:, :, 2, :] - X_true[:, :, 2, :]) ** 2, dim=-1)
-        coef = (norm_pdf(scale, torch.tensor(0)) - norm_pdf(scale, torch.sqrt(diff))) ** 2
-        return (coef * diff)[mask.bool()].mean()
-
-
 def initialize_sequence(seq, chain_M, seq_init_mode):
     if seq_init_mode == "zeros":
         seq[chain_M.bool()] = 0
@@ -84,7 +31,6 @@ def initialize_sequence(seq, chain_M, seq_init_mode):
 def compute_loss(model_args, args, model, sidechain_net=None):
     S = model_args["S"]
     X = deepcopy(model_args["X"])
-    vecs_gt = deepcopy(model_args["optional_features"]["vector_node_seq"])
     mask = model_args["mask"]
     chain_M = model_args["chain_M"]
     mask_for_loss = mask * chain_M
@@ -97,47 +43,24 @@ def compute_loss(model_args, args, model, sidechain_net=None):
             model_args["optional_features"]["vector_node_seq"][chain_M.bool()] = orientations[chain_M.bool()]
     output = model(**model_args, test=args.test)
     seq_loss = torch.tensor(0.).to(args.device)
-    mse_loss = torch.tensor(0.).to(args.device)
-    struct_loss = torch.tensor(0.).to(args.device)
-    orientation_loss = torch.tensor(0.).to(args.device)
-    total_loss = torch.tensor(0.).to(args.device)
     for out in output:
-        if "seq" in out:
-            seq_loss += loss_smoothed(
-                S,
-                out["seq"],
-                mask_for_loss,
-                no_smoothing=args.no_smoothing,
-                ignore_unknown=args.ignore_unknown_residues,
-            )
-        if "att_mse" in out:
-            mse_loss += 0.1 * get_mse_loss(out["att_mse"], mask)
-        if "coords" in out:
-            struct_loss += (
-                args.struct_loss_weight
-                * get_coors_loss(out["coords"], X, mask_for_loss, loss_type=args.struct_loss_type)
-                / (3.5**2)
-            )
-        if "node_vecs" in out:
-            orientation_loss += get_orientation_loss(out["node_vecs"][:, :, 0], vecs_gt[:, :, 0], mask_for_loss.bool())
+        seq_loss += loss_smoothed(
+            S,
+            out["seq"],
+            mask_for_loss,
+            no_smoothing=args.no_smoothing,
+            ignore_unknown=args.ignore_unknown_residues,
+        )
 
-    true_false, rmsd, pp = loss_nll(
-        S, out.get("seq"), mask_for_loss, X, out.get("coords"), ignore_unknown=args.ignore_unknown_residues
+    true_false, pp = loss_nll(
+        S, out.get("seq"), mask_for_loss, ignore_unknown=args.ignore_unknown_residues
     )
     acc = torch.sum(true_false * mask_for_loss).cpu().data.numpy()
     
-    acc_orientation = get_orientation_accuracy(out.get("node_vecs"), vecs_gt, mask_for_loss.bool()).cpu().data.numpy()
-    
     weights = torch.sum(mask_for_loss).cpu().data.numpy()
-    total_loss = (seq_loss + mse_loss + struct_loss + orientation_loss)
     return (
-        total_loss,
-        struct_loss.detach().clone(),
-        seq_loss.detach().clone(),
-        orientation_loss.detach().clone(),
-        rmsd,
+        seq_loss,
         acc,
-        acc_orientation,
         pp,
         weights,
     )
