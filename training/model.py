@@ -3,14 +3,10 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 import numpy as np
-import esm
 from collections import defaultdict
 from copy import deepcopy
 
-from .egnn_new import EGNN_Decoder, EGNN_Encoder
-from .gvp_new import GVP_Decoder, GVP_Encoder
 from .mpnn import MPNN_Encoder, MPNN_Decoder_OS, MPNN_Decoder_AR, MPNN_Decoder_EU
-from .graphgps import GPS_Decoder, GPS_Encoder
 from einops import repeat, rearrange
 from copy import copy, deepcopy
 from training.model_utils import *
@@ -169,12 +165,11 @@ class ProteinMPNN(nn.Module):
         encoders = {
             "mpnn": MPNN_Encoder,
         }
-        decoders = {=
+        decoders = {
             "mpnn": MPNN_Decoder_OS,
             "mpnn_auto": MPNN_Decoder_AR,
         }
         auto_decoders = ["mpnn_auto"]
-        force_update_decoders = ["mpnn", "mpnn_enc"]
         num_letters = 20 if ignore_unknown else 21
 
         if noise_unknown is None:
@@ -211,14 +206,14 @@ class ProteinMPNN(nn.Module):
         )
         args.edge_compute_func = self.features
 
-        n_vectors = {"sidechain": 1, "bb_orientation": 2}
+        n_vectors = {"sidechain_orientation": 1}
         args.vector_dim = 4 + sum([n_vectors[x] for x in node_features_type.split("+") if x in n_vectors])
 
         self.W_e = nn.Linear(hidden_dim, hidden_dim, bias=True)
-        self.W_s = n.Embedding(vocab, embedding_dim)
+        self.W_s = nn.Embedding(vocab, embedding_dim)
         if node_features_type is not None:
-            d_structure = {"dihedral": 2, "topological": 9, "mask": 1, "esm": 320, "secondary_structure": 3}
-            d_sequence = {"chemical": 6, "chem_topological": 105}
+            d_structure = {"dihedral": 2, "secondary_structure": 3}
+            d_sequence = {"chemical": 6}
             input_f_structure = sum(
                 [
                     d_structure[x]
@@ -303,44 +298,6 @@ class ProteinMPNN(nn.Module):
         idxs = [np.array([w.item() for w in idxs[idxs[:, 0] == k][:, 1]] + [len(diffs[k][diffs[k] > 0])]) for k in range(residue_idx.shape[0])]
         return idxs
     
-    def prepare_seqs_for_esm(self, seqs, idxs):
-
-        seqs = [''.join([ALPHABET_DICT[int(s)] for s in seq]) for k, seq in enumerate(seqs)]
-        max_len = len(seqs[0])
-        for k in range(len(seqs)):
-            for idx in idxs[k][-2 : : -1]:
-                seqs[k] = seqs[k][ : idx + 1] + '<eos><cls>' + seqs[k][idx + 1 : ]
-            seqs[k] = seqs[k][ : len(seqs[k]) - max_len + idxs[k][-1] + 1] + '<pad>' * (max_len - idxs[k][-1] - 1)
-            seqs[k] = (str(k), seqs[k].replace('X', '<mask>'))
-        return seqs
-    
-    def retrieve_outputs_from_esm(self, outputs, idxs):
-    
-        idxs = [[0] + [idx + 2 * (k + 1) for k, idx in enumerate(idxs[l][:-1])] + [1 + idx + 2 * (k + 1) for k, idx in enumerate(idxs[l][:-1])] + [outputs.shape[1] - 1] for l in range(len(idxs))]
-        idxs = [F.one_hot(torch.LongTensor(idx)).sum(dim=0) for idx in idxs]
-        out = [outputs[k, ~idxs[k].bool()] for k in range(len(idxs))]
-        min_len = np.min([len(o) for o in out])
-        out = torch.stack([out[k][ : min_len] for k in range(len(out))])
-        return out
-
-    def run_esm(self, S, mask, residue_idx, return_logits=False):
-        
-        device = S.device
-        self.esm.eval()
-        masked_seq = S.detach().clone()
-        masked_seq[mask == 0] = 0
-        idxs = self.find_chains_idx(residue_idx)
-        seqs = self.prepare_seqs_for_esm(masked_seq, idxs)
-        _, _, batch_tokens = self.batch_converter(seqs)
-        batch_tokens = batch_tokens.to(device)
-        with torch.no_grad():
-            results = self.esm(batch_tokens, repr_layers=[6], return_contacts=False)
-        
-        if return_logits:
-            return self.retrieve_outputs_from_esm(results['logits'], idxs)
-        else:
-            return self.retrieve_outputs_from_esm(results["representations"][6], idxs)
-    
     def random_unit_vectors_like(self, tensor):
         rand_vecs = torch.randn_like(tensor)
         norms = torch.norm(rand_vecs, dim=-1, keepdim=True)
@@ -368,11 +325,6 @@ class ProteinMPNN(nn.Module):
         if self.seq_features:
             h_S = torch.cat([V_sequence, h_S], -1)
             h_S = self.W_v_seq(h_S)
-        if "esm" in self.node_features_type:
-            if V_structure is not None:
-                V_structure = torch.cat([V_structure, self.run_esm(seq, mask, residue_idx)], -1)
-            else:
-                V_structure = self.run_esm(seq, mask, residue_idx)
 
         if self.use_sequence_in_encoder:
             if self.str_features:
@@ -399,7 +351,6 @@ class ProteinMPNN(nn.Module):
         residue_idx,
         chain_encoding_all,
         optional_features,
-        global_context,
         test=False,
     ):
         """Graph-conditioned sequence model"""
@@ -433,10 +384,9 @@ class ProteinMPNN(nn.Module):
                 h_E = self.W_e_cycle(h_E)
             else:
                 seq = seq.clone()
-                else:
-                    seq[chain_M.bool()] = torch.max(logits.detach(), -1)[1][chain_M.bool()]
-                    if self.num_letters == 20:
-                        seq[chain_M.bool()] += 1
+                seq[chain_M.bool()] = torch.max(logits.detach(), -1)[1][chain_M.bool()]
+                if self.num_letters == 20:
+                    seq[chain_M.bool()] += 1
                 out["seq"] = logits.clone()
             output.append(out)
 

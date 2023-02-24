@@ -3,16 +3,12 @@ import os.path
 import time, os
 import numpy as np
 import torch
-from torch.utils.data import DataLoader
 import torch.nn as nn
 import os.path
 from training.model import (
     ProteinMPNN,
 )
-import random
 from tqdm import tqdm
-from training.aws_utils import get_trained_model_path
-import optuna
 from training.model_utils import *
 import sys
 from copy import deepcopy
@@ -68,22 +64,15 @@ def compute_loss(model_args, args, model, sidechain_net=None):
 def get_loss(batch, optimizer, args, model, sidechain_net=None):
     device = args.device
     optional_feature_names = {
-        "scalar_seq": ["chemical", "chem_topological"],
-        "scalar_struct": ["dihedral", "topological", "mask_feature", "secondary_structure"],
-        "vector_node_seq": ["sidechain"],
+        "scalar_seq": ["chemical"],
+        "scalar_struct": ["dihedral", "secondary_structure"],
+        "vector_node_seq": ["sidechain_orientation"],
         "vector_node_struct": [],
         "vector_edge_seq": [], # not implemented
         "vector_edge_struct": [], # not implemented
     }
     model_args = {}
-    model_args["chain_M"] = get_masked_sequence(
-        batch,
-        lower_limit=args.lower_masked_limit,
-        upper_limit=args.upper_masked_limit,
-        mask_whole_chains=args.mask_whole_chains,
-        force_binding_sites_frac=args.train_force_binding_sites_frac,
-        mask_frac=args.masking_probability,
-    ).to(dtype=torch.float32, device=device)
+    model_args["chain_M"] = batch["masked_res"].to(dtype=torch.long, device=device)
     model_args["X"] = batch["X"].to(dtype=torch.float32, device=device)
     model_args["S"] = batch["S"].to(dtype=torch.long, device=device)
     model_args["optional_features"] = {}
@@ -104,23 +93,20 @@ def get_loss(batch, optimizer, args, model, sidechain_net=None):
     model_args["mask_original"] = batch["mask_original"].to(
         dtype=torch.float32, device=device
     )
-    model_args["global_context"] = batch["global_context"].to(
-        dtype=torch.float32, device=device
-    )
 
     optimizer.zero_grad()
 
     if not args.no_mixed_precision:
         with torch.cuda.amp.autocast():
-            loss, struct_loss, seq_loss, orientation_loss, rmsd, acc, acc_orientation, pp, weights = compute_loss(
+            loss, acc, pp, weights = compute_loss(
                 model_args, args, model, sidechain_net
             )
     else:
-        loss, struct_loss, seq_loss, orientation_loss, rmsd, acc, acc_orientation, pp, weights = compute_loss(
+        loss, acc, pp, weights = compute_loss(
             model_args, args, model, sidechain_net
         )
 
-    return loss, struct_loss, seq_loss, orientation_loss, acc, acc_orientation, rmsd, pp, weights
+    return loss, acc, pp, weights
 
 def main(args, trial=None):
     # torch.autograd.set_detect_anomaly(True)
@@ -158,13 +144,11 @@ def main(args, trial=None):
     DATA_PARAM = {
         "features_folder": args.features_path,
         "max_length": args.max_protein_length,
-        "min_length": args.min_protein_length,
         "rewrite": args.force,
         "debug": args.debug,
         "load_to_ram": args.load_to_ram,
         "interpolate": args.interpolate,
         "node_features_type": args.node_features,
-        "use_global_topological_context": args.use_global_topological_context,
         "batch_size": args.batch_size,
     }
 
@@ -209,58 +193,7 @@ def main(args, trial=None):
     if args.mask_attention != "none" and args.interpolate == "none":
         args.interpolate = "zeros"
 
-    if args.use_sidechain_pretrained:
-
-        args_pretrained = argparse.Namespace()
-        args_pretrained.in_dim = 128
-        args_pretrained.hidden_dim = 128
-        args_pretrained.vector_dim = 5
-        args_pretrained.num_encoder_layers = 3
-        args_pretrained.num_decoder_layers = 3
-        args_pretrained.num_encoder_mpnn_layers = 2
-        args_pretrained.num_decoder_mpnn_layers = 2
-        args_pretrained.num_neighbors = 32
-        args_pretrained.dropout = 0.1
-
-        sidechain_net = ProteinMPNN(
-            args_pretrained,
-            encoder_type="gvp",
-            decoder_type="gvp",
-            use_esm_embeddings=False,
-            k_neighbors=32,
-            augment_eps=0.2,
-            embedding_dim=128,
-            ignore_unknown=False,
-            mask_attention="none",
-            node_features_type="zeros",
-            only_c_alpha=False,
-            predict_structure=False,
-            noise_unknown=None,
-            n_cycles=1,
-            no_sequence_in_encoder=False,
-            cycle_over_embedding=False,
-            seq_init_mode="zeros",
-            double_sequence_features=False,
-            use_global_feats_attention_dim=False,
-            hidden_dim=128,
-            predict_node_vectors="only_vectors",
-        )
-        sidechain_net.load_state_dict(torch.load(args.sidechain_net_path)["model_state_dict"])
-        if torch.cuda.device_count() > 1:
-            print("Let's use", torch.cuda.device_count(), "GPUs!")
-            # dim = 0 [30, xxx] -> [10, ...], [10, ...], [10, ...] on 3 GPUs
-            sidechain_net = nn.DataParallel(sidechain_net)
-        sidechain_net.to(args.device)
-        sidechain_net.eval()
-    
-    else:
-        sidechain_net = None
-
-    predict_node_vectors = "no_prediction"
-    if args.use_sidechain_orientation:
-        predict_node_vectors = "with_others"
-    if args.train_for_sidechain_orientation:
-        predict_node_vectors = "only_vectors"
+    sidechain_net = None
 
     model = ProteinMPNN(
         args,
@@ -273,19 +206,12 @@ def main(args, trial=None):
         mask_attention=args.mask_attention,
         node_features_type=args.node_features,
         only_c_alpha=args.only_c_alpha,
-        predict_structure=args.predict_structure,
         noise_unknown=args.noise_unknown,
         n_cycles=args.n_cycles,
         no_sequence_in_encoder=args.no_sequence_in_encoder,
-        cycle_over_embedding=args.cycle_over_embedding,
-        seq_init_mode=args.seq_init_mode,
         double_sequence_features=args.double_sequence_features,
-        use_global_feats_attention_dim=args.use_global_topological_context,
         hidden_dim=args.hidden_dim,
         separate_modules_num=args.separate_modules_num,
-        predict_node_vectors=predict_node_vectors,
-        only_cycle_over_decoder=args.only_cycle_over_decoder,
-        random_connections_frac=args.random_connections_frac,
     )
     if torch.cuda.device_count() > 1:
         print("Let's use", torch.cuda.device_count(), "GPUs!")
@@ -315,10 +241,7 @@ def main(args, trial=None):
             e = epoch + e
             model.train()
             train_sum, train_weights = 0.0, 0.0
-            struct_loss_sum, seq_loss_sum, orientation_loss_sum = 0.0, 0.0, 0.0
             train_acc = 0.0
-            train_acc_orientation = 0.0
-            train_rmsd = 0.0
             train_pp = 0.0
             if args.skip_tqdm:
                 loader = train_loader
@@ -326,7 +249,7 @@ def main(args, trial=None):
                 loader = tqdm(train_loader)
             for batch in loader:
                 with torch.autograd.set_detect_anomaly(True):
-                    loss, struct_loss, seq_loss, orientation_loss, acc, acc_orientation, rmsd, pp, weights = get_loss(
+                    loss, acc, pp, weights = get_loss(
                         batch, optimizer, args, model, sidechain_net
                     )
                 if not args.no_mixed_precision:
@@ -338,13 +261,8 @@ def main(args, trial=None):
                     optimizer.step()
 
                 train_sum += loss.detach()
-                struct_loss_sum += struct_loss.detach()
-                seq_loss_sum += seq_loss.detach()
-                orientation_loss_sum += orientation_loss.detach()
                 train_acc += acc
-                train_acc_orientation += acc_orientation
                 train_weights += weights
-                train_rmsd += rmsd
                 train_pp += pp
 
                 total_step += 1
@@ -353,37 +271,28 @@ def main(args, trial=None):
             with torch.no_grad():
                 validation_sum, validation_weights = 0.0, 0.0
                 validation_acc = 0.0
-                validation_acc_orientation = 0.0
-                valid_rmsd = 0.0
                 valid_pp = 0.0
                 if args.skip_tqdm:
                     loader = valid_loader
                 else:
                     loader = tqdm(valid_loader)
                 for batch in loader:
-                    loss, struct_loss, seq_loss, orientation_loss, acc, acc_orientation, rmsd, pp, weights = get_loss(
+                    loss, acc, pp, weights = get_loss(
                         batch, optimizer, args, model, sidechain_net
                     )
                     validation_sum += loss.detach()
                     validation_acc += acc
-                    validation_acc_orientation += acc_orientation
-                    valid_rmsd += rmsd
                     valid_pp += pp
                     validation_weights += weights
 
+            length_train = len(train_loader.dataset)
+            length_valid = len(valid_loader.dataset)
             train_accuracy = train_acc / train_weights
             validation_accuracy = validation_acc / validation_weights
-            train_accuracy_orientation = train_acc_orientation / train_weights
-            validation_accuracy_orientation = validation_acc_orientation / validation_weights
-            train_rmsd = train_rmsd / len(train_set)
-            valid_rmsd = valid_rmsd / len(valid_set)
-            train_pp = train_pp / len(train_set)
-            valid_pp = valid_pp / len(valid_set)
-            train_loss = float(train_sum / len(train_set))
-            struct_loss = float(struct_loss_sum / len(train_set))
-            seq_loss = float(seq_loss_sum / len(train_set))
-            orientation_loss = float(orientation_loss_sum / len(train_set))
-            validation_loss = float(validation_sum / len(valid_set))
+            train_pp = train_pp / length_train
+            valid_pp = valid_pp / length_valid
+            train_loss = float(train_sum / length_train)
+            validation_loss = float(validation_sum / length_valid)
 
             train_accuracy_ = np.format_float_positional(
                 np.float32(train_accuracy), unique=False, precision=3
@@ -391,29 +300,16 @@ def main(args, trial=None):
             validation_accuracy_ = np.format_float_positional(
                 np.float32(validation_accuracy), unique=False, precision=3
             )
-            train_accuracy_orientation_ = np.format_float_positional(
-                np.float32(train_accuracy_orientation), unique=False, precision=3
-            )
-            validation_accuracy_orientation_ = np.format_float_positional(
-                np.float32(validation_accuracy_orientation), unique=False, precision=3
-            )
 
             t1 = time.time()
             dt = np.format_float_positional(
                 np.float32(t1 - t0), unique=False, precision=1
             )
-            epoch_string = f"epoch: {e+1}, step: {total_step}, time: {dt}, train: {train_loss:.2f}, valid: {validation_loss:.2f}, train_acc: {train_accuracy_}, valid_acc: {validation_accuracy_}, train_rmsd: {train_rmsd:.2f}, valid_rmsd: {valid_rmsd:.2f}, train_pp: {train_pp:.2f}, valid_pp: {valid_pp:.2f}\n"
+            epoch_string = f"epoch: {e+1}, step: {total_step}, time: {dt}, train: {train_loss:.2f}, valid: {validation_loss:.2f}, train_acc: {train_accuracy_}, valid_acc: {validation_accuracy_}, train_pp: {train_pp:.2f}, valid_pp: {valid_pp:.2f}\n"
 
             with open(logfile, "a") as f:
                 f.write(epoch_string)
             print(epoch_string)
-
-            if trial is not None:  # optuna trial for hyperparameter optimization
-                if args.train_for_sidechain_orientation:
-                    trial.report(validation_accuracy_orientation, e)
-                trial.report(validation_accuracy, e)
-                if trial.should_prune():
-                    raise optuna.TrialPruned()
 
             checkpoint_filename_last = (
                 base_folder + "model_weights/epoch_last.pt".format(e + 1, total_step)
