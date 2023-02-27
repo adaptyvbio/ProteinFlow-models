@@ -154,7 +154,7 @@ class ProteinMPNN(nn.Module):
         embedding_dim=128,
         mask_attention="none",
         ignore_unknown=False,
-        node_features_type="zeros",
+        node_features_type=None,
         only_c_alpha: bool = False,
         n_cycles: int = 1,
         no_sequence_in_encoder: bool = False,
@@ -207,7 +207,7 @@ class ProteinMPNN(nn.Module):
         args.edge_compute_func = self.features
 
         n_vectors = {"sidechain_orientation": 1}
-        args.vector_dim = 4 + sum([n_vectors[x] for x in node_features_type.split("+") if x in n_vectors])
+        args.vector_dim = 4 + sum([n_vectors[x] for x in node_features_type.split("+") if x in n_vectors]) if node_features_type is not None else 4
 
         self.W_e = nn.Linear(hidden_dim, hidden_dim, bias=True)
         self.W_s = nn.Embedding(vocab, embedding_dim)
@@ -259,14 +259,6 @@ class ProteinMPNN(nn.Module):
         self.decoders = nn.ModuleList([decoders[decoder_type](args) for i in range(n_cycles)])
         self.W_out = nn.Linear(hidden_dim, num_letters, bias=True)
         self.W_e_cycle = None
-
-        if self.attention != "none":
-            self.att_layer = MaskAttLayer(
-                node_dim=hidden_dim,
-                edge_dim=hidden_dim,
-                include_nodes=(node_features_type != "zeros"),
-                num_heads=3,
-            )
 
         for p in self.parameters():
             if p.dim() > 1:

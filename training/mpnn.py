@@ -140,24 +140,24 @@ class MPNN_Decoder_EU(Encoder):
         self.layers = nn.ModuleList(
             [
                 EncLayer(
-                    num_V_dim=args.hidden_dim,
+                    num_V_dim=128,
                     num_E_dim=args.in_dim,
-                    num_hidden=args.hidden_dim,
-                    dropout=args.dropout,
-                    no_edge_update=args.no_edge_update,
+                    num_hidden=128,
+                    dropout=0.1,
+                    no_edge_update=False,
                 )
-                for _ in range(args.num_decoder_layers)
+                for _ in range(3)
             ]
         )
-        self.use_attn = args.use_attention_in_decoder
+        self.use_attn = False
         if self.use_attn:
             self.self_attn = torch.nn.ModuleList(
                 [
-                    torch.nn.MultiheadAttention(args.hidden_dim, 4, dropout=0.01, batch_first=True) for _ in range(args.num_decoder_layers)
+                    torch.nn.MultiheadAttention(128, 4, dropout=0.01, batch_first=True) for _ in range(3)
                 ]
             )
         else:
-            self.self_attn = [None for _ in range(args.num_decoder_layers)]
+            self.self_attn = [None for _ in range(3)]
 
         
     def forward(self, h_V, h_E, E_idx, mask, X, residue_idx, chain_encoding_all, global_context):
@@ -185,24 +185,24 @@ class MPNN_Encoder(Encoder):
         self.layers = nn.ModuleList(
             [
                 EncLayer(
-                    num_V_dim=args.hidden_dim,
-                    num_E_dim=args.hidden_dim,
-                    num_hidden=args.hidden_dim,
-                    dropout=args.dropout,
-                    no_edge_update=args.no_edge_update,
+                    num_V_dim=128,
+                    num_E_dim=128,
+                    num_hidden=128,
+                    dropout=0.1,
+                    no_edge_update=False,
                 )
-                for _ in range(args.num_encoder_layers)
+                for _ in range(3)
             ]
         )
-        self.use_attn = args.use_attention_in_encoder
+        self.use_attn = False
         if self.use_attn:
             self.self_attn = torch.nn.ModuleList(
                 [
-                    torch.nn.MultiheadAttention(args.hidden_dim, 4, dropout=0.01, batch_first=True) for _ in range(args.num_encoder_layers)
+                    torch.nn.MultiheadAttention(128, 4, dropout=0.01, batch_first=True) for _ in range(3)
                 ]
             )
         else:
-            self.self_attn = [None for _ in range(args.num_encoder_layers)]
+            self.self_attn = [None for _ in range(3)]
 
         
     def forward(self, h_V, h_E, E_idx, mask, X, residue_idx, chain_encoding_all, global_context):
@@ -230,9 +230,9 @@ class MPNN_Decoder_AR(Decoder_AR):
         self.layers = nn.ModuleList(
             [
                 DecLayer(
-                    args.hidden_dim, args.in_dim + args.hidden_dim, dropout=args.dropout
+                    128, args.in_dim + 128, dropout=0.1
                 )
-                for _ in range(args.num_decoder_layers)
+                for _ in range(3)
             ]
         )
 
@@ -342,20 +342,20 @@ class MPNN_Decoder_OS(Decoder):
         self.layers = nn.ModuleList(
             [
                 DecLayer(
-                    args.hidden_dim, args.in_dim + args.hidden_dim, dropout=args.dropout,
+                    128, args.in_dim + 128, dropout=0.1,
                 )
-                for _ in range(args.num_decoder_layers)
+                for _ in range(3)
             ]
         )
-        self.use_attn = args.use_attention_in_decoder
+        self.use_attn = False
         if self.use_attn:
             self.self_attn = torch.nn.ModuleList(
                 [
-                    torch.nn.MultiheadAttention(args.hidden_dim, 4, dropout=0.01, batch_first=True) for _ in range(args.num_encoder_layers)
+                    torch.nn.MultiheadAttention(128, 4, dropout=0.01, batch_first=True) for _ in range(3)
                 ]
             )
         else:
-            self.self_attn = [None for _ in range(args.num_encoder_layers)]
+            self.self_attn = [None for _ in range(3)]
     
     def forward(self, h_V, h_E, E_idx, mask, X, residue_idx, chain_encoding_all, global_context):
         mask_attend = gather_nodes(mask.unsqueeze(-1), E_idx).squeeze(-1)
