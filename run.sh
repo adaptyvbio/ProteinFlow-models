@@ -4,7 +4,7 @@
 # Run experiments
 python run.py --experiment_name autoregressive --decoder_type mpnn_auto
 python run.py --experiment_name one_shot
-python run.py --experiment_name one_shot_no_shuffle --not_shuffle_cluster
+python run.py --experiment_name one_shot_no_shuffle --not_shuffle_clusters
 python run.py --experiment_name one_shot_multi_dihedral --n_cycles 3 --separate_modules_num 2 --node_features dihedral
 
 # Test models
