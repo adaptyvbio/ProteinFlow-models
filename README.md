@@ -11,4 +11,4 @@ For more information, check out the `--help` option.
 The dataset is expected to be in ProteinFlow format, in training, validation and test folders located at the dataset path.
 
 # References
-This code was adapted from [ProteinMPN](https://github.com/dauparas/ProteinMPNN).
+This code was adapted from [ProteinMPNN](https://github.com/dauparas/ProteinMPNN).
