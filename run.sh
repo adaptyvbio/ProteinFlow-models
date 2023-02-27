@@ -1,5 +1,5 @@
 # Download data
-# proteinflow download --tag 20230102_stable
+proteinflow download --tag 20230102_stable
 
 # Run experiments
 python run.py --experiment_name autoregressive --decoder_type mpnn_auto
