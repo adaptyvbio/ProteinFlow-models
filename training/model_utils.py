@@ -90,7 +90,7 @@ def loss_nll(S, log_probs, mask, ignore_unknown):
         pp = 0
     else:
         max_prob, S_argmaxed = torch.max(torch.softmax(log_probs, -1), -1)  # [B, L]
-        pp = torch.exp(- torch.log(max_prob).mean(-1)).sum()
+        pp = torch.exp(- (torch.log(max_prob) * mask).sum(-1) / mask.sum(-1)).sum()
         if ignore_unknown:
             S_argmaxed += 1
         true_false = (S == S_argmaxed).float()

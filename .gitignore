@@ -139,4 +139,5 @@ sync_experiments.sh
 */last_study.pkl
 .tmp/*
 sample_data/tmp/
+data/
 

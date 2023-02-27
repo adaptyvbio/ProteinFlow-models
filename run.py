@@ -26,7 +26,6 @@ def initialize_sequence(seq, chain_M, seq_init_mode):
 
 def compute_loss(model_args, args, model, sidechain_net=None):
     S = model_args["S"]
-    X = deepcopy(model_args["X"])
     mask = model_args["mask"]
     chain_M = model_args["chain_M"]
     mask_for_loss = mask * chain_M
@@ -51,6 +50,7 @@ def compute_loss(model_args, args, model, sidechain_net=None):
     true_false, pp = loss_nll(
         S, out.get("seq"), mask_for_loss, ignore_unknown=args.ignore_unknown_residues
     )
+    pp = pp.cpu().data.numpy()
     acc = torch.sum(true_false * mask_for_loss).cpu().data.numpy()
     
     weights = torch.sum(mask_for_loss).cpu().data.numpy()
@@ -171,13 +171,13 @@ def main(args, trial=None):
     print("\nDATA LOADING")
     if not args.test:
         train_loader = ProteinLoader(
-            dataset_folder=os.path.join(args.dataset_path, "training"),
+            dataset_folder=os.path.join(args.dataset_path, "train"),
             clustering_dict_path=training_dict,
             shuffle_clusters=not args.not_shuffle_clusters,
             **DATA_PARAM,
         )
         valid_loader = ProteinLoader(
-            dataset_folder=os.path.join(args.dataset_path, "validation"),
+            dataset_folder=os.path.join(args.dataset_path, "valid"),
             clustering_dict_path=validation_dict,
             shuffle_clusters=False,
             **DATA_PARAM,
@@ -416,13 +416,13 @@ def parse(command = None):
     argparser.add_argument(
         "--dataset_path",
         type=str,
-        default="/home/ubuntu/ml-4/data/best_prot",
+        default="./data/proteinflow_20230102_stable/",
         help="path for loading training data (a folder with training, test and validation subfolders)",
     )
     argparser.add_argument(
         "--features_path",
         type=str,
-        default="/home/ubuntu/ml-4/data/tmp_features",
+        default="./data/tmp_features/",
         help="path where ProteinMPNN features will be saved",
     )
     argparser.add_argument(
@@ -434,7 +434,7 @@ def parse(command = None):
     argparser.add_argument(
         "--clustering_dict_path",
         type=str,
-        default="/home/ubuntu/ml-4/data/best_prot/splits_dict",
+        default="./data/proteinflow_20230102_stable/splits_dict",
         help="path to a folder containing train.pickle, valid.pickle and test.pickle clustering files",
     )
     argparser.add_argument(
