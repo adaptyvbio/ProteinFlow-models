@@ -11,11 +11,16 @@ from training.model import (
 from tqdm import tqdm
 from training.model_utils import *
 import sys
-from copy import deepcopy
-from scipy.stats import norm
-from math import sqrt
 from proteinflow import ProteinLoader
 
+
+def get_trained_model_path(load_experiment, epoch_mode):
+    if epoch_mode == "last":
+        filename = "epoch_last.pt"
+    elif epoch_mode == "best":
+        filename = "epoch_best.pt"
+    model_path = os.path.join("experiments", load_experiment, "model_weights", filename)
+    return model_path
 
 def initialize_sequence(seq, chain_M, seq_init_mode):
     if seq_init_mode == "zeros":
@@ -24,7 +29,7 @@ def initialize_sequence(seq, chain_M, seq_init_mode):
         seq[chain_M.bool()] = torch.randint(size=seq[chain_M.bool()].shape, low=1, high=22)
     return seq
 
-def compute_loss(model_args, args, model, sidechain_net=None):
+def compute_loss(model_args, args, model):
     S = model_args["S"]
     mask = model_args["mask"]
     chain_M = model_args["chain_M"]
@@ -55,7 +60,7 @@ def compute_loss(model_args, args, model, sidechain_net=None):
         weights,
     )
 
-def get_loss(batch, optimizer, args, model, sidechain_net=None):
+def get_loss(batch, optimizer, args, model):
     device = args.device
     optional_feature_names = {
         "scalar_seq": ["chemical"],
@@ -92,7 +97,7 @@ def get_loss(batch, optimizer, args, model, sidechain_net=None):
 
     with torch.cuda.amp.autocast():
         loss, acc, pp, weights = compute_loss(
-            model_args, args, model, sidechain_net
+            model_args, args, model
         )
     # else:
     #     loss, acc, pp, weights = compute_loss(
@@ -101,8 +106,9 @@ def get_loss(batch, optimizer, args, model, sidechain_net=None):
 
     return loss, acc, pp, weights
 
-def main(args, trial=None):
+def main(args):
     # torch.autograd.set_detect_anomaly(True)
+    args.output_path = os.path.join("experiments", args.experiment_name)
 
     scaler = torch.cuda.amp.GradScaler()
 
@@ -176,8 +182,6 @@ def main(args, trial=None):
             **DATA_PARAM,
         )
 
-    sidechain_net = None
-
     model = ProteinMPNN(
         args,
         encoder_type="mpnn",
@@ -230,7 +234,7 @@ def main(args, trial=None):
             for batch in loader:
                 with torch.autograd.set_detect_anomaly(True):
                     loss, acc, pp, weights = get_loss(
-                        batch, optimizer, args, model, sidechain_net
+                        batch, optimizer, args, model
                     )
                 scaler.scale(loss).backward()
                 scaler.step(optimizer)
@@ -254,7 +258,7 @@ def main(args, trial=None):
                 loader = tqdm(valid_loader)
                 for batch in loader:
                     loss, acc, pp, weights = get_loss(
-                        batch, optimizer, args, model, sidechain_net
+                        batch, optimizer, args, model
                     )
                     validation_sum += loss.detach()
                     validation_acc += acc
@@ -348,29 +352,26 @@ def main(args, trial=None):
         with torch.no_grad():
             validation_sum, validation_weights = 0.0, 0.0
             validation_acc = 0.0
-            validation_acc_orientation = 0.0
-            valid_rmsd = 0.0
             valid_pp = 0.0
             for batch in tqdm(test_loader):
-                loss, struct_loss, seq_loss, orientation_loss, acc, acc_orientation, rmsd, pp, weights = get_loss(
-                        batch, optimizer, args, model, sidechain_net
+                loss, acc, pp, weights = get_loss(
+                        batch, optimizer, args, model
                 )
                 validation_sum += loss.detach()
                 validation_acc += acc
-                valid_rmsd += rmsd
                 valid_pp += pp
                 validation_weights += weights
 
+            length_test = len(test_loader.dataset)
             validation_accuracy = validation_acc / validation_weights
-            valid_rmsd = valid_rmsd / len(test_set)
-            valid_pp = valid_pp / len(test_set)
-            validation_loss = float(validation_sum / len(test_set))
+            valid_pp = valid_pp / length_test
+            validation_loss = float(validation_sum / length_test)
 
             validation_accuracy_ = np.format_float_positional(
-                np.float32(validation_accuracy), unique=False, precision=3
+                np.float32(validation_accuracy), unique=False, precision=3,
             )
             
-            print(f"test_acc: {validation_accuracy_}, test_rmsd: {valid_rmsd:.2f}, test_pp: {valid_pp:.2f}")
+            print(f"test_acc: {validation_accuracy_}, test_pp: {valid_pp:.2f}")
 
 def parse(command = None):
     if command is not None:
@@ -392,10 +393,10 @@ def parse(command = None):
         help="path where ProteinMPNN features will be saved",
     )
     argparser.add_argument(
-        "--output_path",
+        "--experiment_name",
         type=str,
-        default="./exp_020",
-        help="path for logs and model weights",
+        default="test",
+        help="tag for the experiment, used for naming the output folder",
     )
     argparser.add_argument(
         "--clustering_dict_path",
@@ -462,7 +463,7 @@ def parse(command = None):
     argparser.add_argument(
         "--decoder_type",
         choices=["mpnn", "mpnn_auto"],
-        default="mpnn_auto"
+        default="mpnn"
     )
     argparser.add_argument(
         "--separate_modules_num",
