@@ -769,22 +769,6 @@ def parse(command = None):
         action="store_true",
         help="Use a fixed representative for each cluster instead of shuffling them"
     )
-    argparser.add_argument(
-        "--use_pna_in_encoder",
-        action="store_true",
-        help="Use PNA aggregation in the encoder"
-    )
-    argparser.add_argument(
-        "--use_pna_in_decoder",
-        action="store_true",
-        help="Use PNA aggregation in the decoder"
-    )
-    argparser.add_argument(
-        "--random_connections_frac",
-        type=float,
-        default=0.0,
-        help="The fraction of random connections to add to the graph"
-    )
 
     args = argparser.parse_args()
     return args

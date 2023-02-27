@@ -5,7 +5,6 @@ from .base_models import Encoder, Decoder, Decoder_AR
 from .model_utils import *
 import torch.utils.checkpoint
 from copy import deepcopy
-from .model_utils import pna_aggregate
 
 
 class PositionWiseFeedForward(nn.Module):
@@ -32,11 +31,9 @@ class EncLayer(nn.Module):
         dropout=0.1,
         scale=30,
         no_edge_update=False,
-        pna=False,
     ):
         super(EncLayer, self).__init__()
         self.scale = scale
-        self.pna = pna
         self.no_edge_update = no_edge_update
         self.dropout1 = nn.Dropout(dropout)
         self.dropout2 = nn.Dropout(dropout)
@@ -52,7 +49,7 @@ class EncLayer(nn.Module):
         self.W12 = nn.Linear(num_hidden, num_hidden, bias=True)
         self.W13 = nn.Linear(num_hidden, num_E_dim, bias=True)
         self.act = torch.nn.GELU()
-        self.dense = PositionWiseFeedForward(num_hidden * 4 if self.pna else num_hidden, num_hidden * 4, num_hidden)
+        self.dense = PositionWiseFeedForward(num_hidden, num_hidden * 4, num_hidden)
 
     def forward(self, h_V, h_E, E_idx, mask_V=None, mask_attend=None):
         """Parallel computation of full transformer layer"""
@@ -68,15 +65,11 @@ class EncLayer(nn.Module):
                 mask_attend.unsqueeze(-1) * h_message
             )  # 0 if at least one vertex is unknown
 
-        if self.pna:
-            dh = pna_aggregate(h_message, mask_attend)
-            dh = self.dense(torch.cat([h_V, dh], -1))  # 3 linear layers
-        else:
-            dh = torch.sum(h_message, -2) / self.scale  # sum over neighbors
-            h_V = self.norm1(
-                h_V + self.dropout1(dh)
-            )  # update known vertices with sum of output over neighbors
-            dh = self.dense(h_V)
+        dh = torch.sum(h_message, -2) / self.scale  # sum over neighbors
+        h_V = self.norm1(
+            h_V + self.dropout1(dh)
+        )  # update known vertices with sum of output over neighbors
+        dh = self.dense(h_V)
 
         h_V = self.norm2(
             h_V + self.dropout2(dh)
@@ -98,13 +91,12 @@ class EncLayer(nn.Module):
 
 class DecLayer(nn.Module):
     def __init__(
-        self, num_hidden, num_in, dropout=0.1, scale=30, pna=False,
+        self, num_hidden, num_in, dropout=0.1, scale=30,
     ):
         super(DecLayer, self).__init__()
         self.num_hidden = num_hidden
         self.num_in = num_in
         self.scale = scale
-        self.pna = pna
         self.dropout1 = nn.Dropout(dropout)
         self.dropout2 = nn.Dropout(dropout)
         self.norm1 = nn.LayerNorm(num_hidden)
@@ -114,7 +106,7 @@ class DecLayer(nn.Module):
         self.W2 = nn.Linear(num_hidden, num_hidden, bias=True)
         self.W3 = nn.Linear(num_hidden, num_hidden, bias=True)
         self.act = torch.nn.GELU()
-        self.dense = PositionWiseFeedForward(num_hidden * 4 if self.pna else num_hidden, num_hidden * 4, num_hidden)
+        self.dense = PositionWiseFeedForward(num_hidden, num_hidden * 4, num_hidden)
 
     def forward(self, h_V, h_E, mask_V=None, mask_attend=None):
         """Parallel computation of full transformer layer"""
@@ -130,12 +122,9 @@ class DecLayer(nn.Module):
             h_message = (
                 mask_attend.unsqueeze(-1) * h_message
             )  # set to 0 if model doesn't see the vertex
-        if self.pna:
-            dh = self.dense(torch.cat([h_V, pna_aggregate(h_message, mask_attend)], -1))
-        else:
-            dh = torch.sum(h_message, -2) / self.scale
-            h_V = self.norm1(h_V + self.dropout1(dh))
-            dh = self.dense(h_V)
+        dh = torch.sum(h_message, -2) / self.scale
+        h_V = self.norm1(h_V + self.dropout1(dh))
+        dh = self.dense(h_V)
 
         h_V = self.norm2(h_V + self.dropout2(dh))  # update vertex features again
 
@@ -156,7 +145,6 @@ class MPNN_Decoder_EU(Encoder):
                     num_hidden=args.hidden_dim,
                     dropout=args.dropout,
                     no_edge_update=args.no_edge_update,
-                    pna=args.use_pna_in_decoder,
                 )
                 for _ in range(args.num_decoder_layers)
             ]
@@ -202,7 +190,6 @@ class MPNN_Encoder(Encoder):
                     num_hidden=args.hidden_dim,
                     dropout=args.dropout,
                     no_edge_update=args.no_edge_update,
-                    pna=args.use_pna_in_encoder,
                 )
                 for _ in range(args.num_encoder_layers)
             ]
@@ -243,7 +230,7 @@ class MPNN_Decoder_AR(Decoder_AR):
         self.layers = nn.ModuleList(
             [
                 DecLayer(
-                    args.hidden_dim, args.in_dim + args.hidden_dim, dropout=args.dropout, pna=args.use_pna_in_decoder,
+                    args.hidden_dim, args.in_dim + args.hidden_dim, dropout=args.dropout
                 )
                 for _ in range(args.num_decoder_layers)
             ]
@@ -355,7 +342,7 @@ class MPNN_Decoder_OS(Decoder):
         self.layers = nn.ModuleList(
             [
                 DecLayer(
-                    args.hidden_dim, args.in_dim + args.hidden_dim, dropout=args.dropout, pna=args.use_pna_in_decoder,
+                    args.hidden_dim, args.in_dim + args.hidden_dim, dropout=args.dropout,
                 )
                 for _ in range(args.num_decoder_layers)
             ]

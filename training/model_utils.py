@@ -60,29 +60,6 @@ def get_std_opt(parameters, d_model, step):
     )
 
 
-def pna_aggregate(features, mask):
-    """PNA aggregation of features shaped `(B, L, N, K)` from neighbors to nodes"""
-
-    d = mask.unsqueeze(-1).sum(-2)
-    # denom = ...
-    # S_pos = torch.log(d + 1) / denom
-    # S_neg = 1 / S_pos
-    # print(f'{features.shape=}, {d.shape=}')
-    # f_mean = features.sum(2) / d.unsqueeze(-1)
-    # print(d)
-    f_mean = features.sum(2) / (d + 1e-6)
-    feat = features.clone()
-    d_mask = (d.squeeze(-1) == 0)
-    feat[d_mask] = - float('inf')
-    f_max = feat.max(2)[0]
-    feat[d_mask] = float('inf')
-    f_min = features.min(2)[0]
-    f = torch.cat([f_mean, f_max, f_min], -1)
-    f[d_mask] = 0
-    return f
-
-
-
 def loss_nll(S, log_probs, mask, ignore_unknown):
     """Negative log probabilities"""
     if log_probs is None:
