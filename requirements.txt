@@ -1,11 +1,8 @@
-optuna
 p_tqdm
-fair-esm
 pandas
-giotto-tda
-pytorch_lightning
 yacs
 einops
 boto3
 click
 biotite==0.35.0
+proteinflow==1.1.1
